@@ -1,0 +1,37 @@
+name: Bug report
+description: Something isn't working on the router or in RouterBar
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **remove personal details** (public IPs, Wi-Fi names, MAC addresses,
+        Tailscale addresses) from anything you paste. Security problems: use Security → Report a vulnerability instead.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [VPN status LED, Tailscale, Reboot log, Router helpers / speed test, RouterBar (Mac app), Installer / uninstaller]
+    validations: { required: true }
+  - type: input
+    id: firmware
+    attributes:
+      label: Router model and firmware
+      description: "Output of: ssh glrouter 'cat /etc/glversion'"
+      placeholder: GL-SFT1200, 4.8.3
+    validations: { required: true }
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version (RouterBar issues only)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "e.g. ssh glrouter 'logread | grep -E \"vpn-led|tailscale|reboot-log|router-app\" | tail -50'"
+      render: text

@@ -1,0 +1,35 @@
+#!/bin/sh /etc/rc.common
+# Tailscale on GL-SFT1200 (binaries in /root/ts, state kept across reboots).
+START=99
+STOP=10
+USE_PROCD=1
+TS=/root/ts
+
+start_service() {
+    # Program files missing (e.g. after a firmware update): reinstall in the background;
+    # autoinstall.sh starts this service again when it's done.
+    if [ ! -x $TS/tailscaled ] || [ ! -x $TS/tailscale ]; then
+        if [ -x $TS/autoinstall.sh ]; then
+            logger -t tailscale "program files missing, starting automatic reinstall"
+            start-stop-daemon -S -b -x $TS/autoinstall.sh
+        else
+            logger -t tailscale "program files missing, not starting"
+        fi
+        return 0
+    fi
+    mkdir -p /var/run/tailscale
+    procd_open_instance tailscaled
+    procd_set_param command $TS/tailscaled \
+        --state=$TS/tailscaled.state --statedir=$TS \
+        --socket=/var/run/tailscale/tailscaled.sock \
+        --port=41641 --tun=tailscale0
+    procd_set_param respawn 3600 10 5
+    procd_set_param stdout 0
+    procd_set_param stderr 0
+    procd_close_instance
+
+    procd_open_instance memguard
+    procd_set_param command $TS/memguard.sh
+    procd_set_param respawn 3600 30 5
+    procd_close_instance
+}

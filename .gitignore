@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Swift / build output
+mac/RouterBar/.build/
+mac/RouterBar/build/
+*.xcodeproj/xcuserdata/
+.swiftpm/
+
+# Never commit Tailscale binaries (the router downloads them itself)
+router/tailscale/tailscale
+router/tailscale/tailscaled
+*.tgz
