@@ -29,8 +29,10 @@ struct MenuView: View {
     // MARK: Tiles
 
     private func vpnTile(_ s: RouterStatus) -> some View {
-        let on = s.vpn.wanted
+        let switching = model.vpnSwitching
+        let on = switching?.target ?? s.vpn.wanted
         let subtitle: String = {
+            if let sw = switching { return sw.target ? "Switching on…" : "Switching off…" }
             switch s.vpn.state {
             case "connected": return s.vpn.location.split(separator: ",").last.map(String.init) ?? "Connected"
             case "connecting": return "Connecting…"
@@ -40,25 +42,31 @@ struct MenuView: View {
         return Tile(symbol: s.vpn.state == "connected" ? "lock.shield.fill" : "lock.shield",
                     title: "VPN", subtitle: subtitle,
                     active: on, tint: accentBlue,
-                    busy: model.busyAction?.hasPrefix("VPN") == true) {
-            model.perform(on ? "vpn-off" : "vpn-on", label: on ? "VPN off" : "VPN on")
+                    busy: switching != nil || model.busyAction?.hasPrefix("VPN") == true) {
+            model.toggleVPN()
         }
-        .help(on ? "Turn the VPN off" : "Turn the VPN on")
+        .help(switching != nil ? "The router is switching the VPN; this takes up to a minute"
+                               : on ? "Turn the VPN off" : "Turn the VPN on")
     }
 
     private func tailscaleTile(_ s: RouterStatus) -> some View {
-        let ok = s.tailscale.installed && s.tailscale.running && s.tailscale.health == "ok"
-        let subtitle = !s.tailscale.installed ? "Not set up"
-            : ok ? s.tailscale.ip
-            : s.tailscale.running ? "Not connected" : "Not running"
+        let t = s.tailscale
+        let wanted = t.wanted ?? true
+        let connected = t.installed && wanted && t.running && t.health == "ok"
+        let subtitle = !t.installed ? "Not set up"
+            : !wanted ? "Off"
+            : connected ? t.ip
+            : t.running ? "Connecting…" : "Not running"
         return Tile(symbol: "point.3.connected.trianglepath.dotted",
                     title: "Tailscale", subtitle: subtitle,
-                    active: ok, tint: ok ? .green : .orange,
-                    warning: s.tailscale.installed && !ok,
+                    active: connected, tint: .green,
+                    warning: t.installed && wanted && !connected,
                     busy: model.busyAction?.hasPrefix("Tailscale") == true) {
-            model.perform("tailscale-restart", label: "Tailscale restart")
+            model.toggleTailscale()
         }
-        .help("Restart Tailscale on the router")
+        .disabled(!t.installed)
+        .help(!t.installed ? "Tailscale isn't installed on the router"
+              : wanted ? "Turn Tailscale off on the router" : "Turn Tailscale on on the router")
     }
 
     // MARK: Cards

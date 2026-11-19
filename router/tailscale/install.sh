@@ -12,6 +12,7 @@
 #   /etc/init.d/tailscale           starts at boot, restarts it if it stops; if the program files are
 #                                   missing (e.g. after a firmware update) it reinstalls them itself
 #   /root/ts/memguard.sh            stops tailscaled if usable memory drops below 10 MB
+#   /root/ts/ts-ctl.sh              on/off switch (used by RouterBar); always reconnects at boot
 #   zram-swap                       compressed memory (Tailscale needs the headroom on 128 MB)
 #   network + firewall "tailscale"  Tailscale <-> the router's LAN in both directions
 #                                   (LAN -> Tailscale is address-translated to the router)
@@ -36,14 +37,20 @@ SCP="scp -O -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa"
 
 echo "Copying scripts to the router..."
 $SSH "$R" 'mkdir -p /root/ts; rm -f /root/ts/*.new'
-$SCP memguard.sh autoinstall.sh tailscale.init "$R:/root/ts/"
+$SCP memguard.sh autoinstall.sh ts-ctl.sh tailscale.init "$R:/root/ts/"
 
 # Only a fixed flag (never the raw environment value) goes into the remote command.
 RE=""; [ -n "${REINSTALL:-}" ] && RE=1
 $SSH "$R" "REINSTALL=$RE sh -s" <<'EOF'
 set -e
 mv /root/ts/tailscale.init /etc/init.d/tailscale
-chmod +x /root/ts/memguard.sh /root/ts/autoinstall.sh /etc/init.d/tailscale
+chmod +x /root/ts/memguard.sh /root/ts/autoinstall.sh /root/ts/ts-ctl.sh /etc/init.d/tailscale
+
+# Settings used whenever Tailscale is (re)connected: by this installer, at boot, and by
+# the RouterBar on/off switch (see ts-ctl.sh).
+LAN=$(ip -4 route show dev br-lan scope link | awk '{print $1; exit}')
+HOST=$(uci -q get system.@system[0].hostname | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')
+echo "--netfilter-mode=off --accept-dns=false --hostname=${HOST:-gl-router} --advertise-routes=$LAN" > /root/ts/up-flags
 
 # Network interface + firewall zone
 uci -q get network.tailscale >/dev/null || {
@@ -72,7 +79,7 @@ uci set firewall.tailscale.mtu_fix=1
 uci commit firewall
 
 # Keep-list for firmware updates (small files only)
-for p in /root/ts/tailscaled.state /root/ts/memguard.sh /root/ts/autoinstall.sh /etc/init.d/tailscale /etc/rc.d/S99tailscale; do
+for p in /root/ts/tailscaled.state /root/ts/memguard.sh /root/ts/autoinstall.sh /root/ts/ts-ctl.sh /root/ts/up-flags /etc/init.d/tailscale /etc/rc.d/S99tailscale; do
   grep -qx "$p" /etc/sysupgrade.conf || echo "$p" >> /etc/sysupgrade.conf
 done
 /etc/init.d/tailscale enable
@@ -92,19 +99,19 @@ else
 fi
 /etc/init.d/network reload; sleep 3; /etc/init.d/firewall reload >/dev/null 2>&1
 
-# The router's own LAN subnet, e.g. 192.168.8.0/24
-LAN=$(ip -4 route show dev br-lan scope link | awk '{print $1; exit}')
 T="/root/ts/tailscale --socket=/var/run/tailscale/tailscaled.sock"
 echo "Waiting for Tailscale to start (can take a minute on this router)..."
 i=0; until [ -S /var/run/tailscale/tailscaled.sock ] || [ $i -ge 40 ]; do sleep 3; i=$((i+1)); done
 sleep 10
 if $T status --json 2>/dev/null | grep -q '"BackendState": "NeedsLogin"'; then
-  $T up --netfilter-mode=off --accept-dns=false --hostname="$(uci -q get system.@system[0].hostname | tr 'A-Z' 'a-z')" \
-        --advertise-routes="$LAN" --timeout=5s >/dev/null 2>&1 || true
+  # shellcheck disable=SC2046
+  $T up $(cat /root/ts/up-flags) --timeout=5s >/dev/null 2>&1 || true
   echo "Sign in at: $($T status --json | grep -oE 'https://login.tailscale.com/[^"]+' | head -1)"
   echo "Then approve the $LAN route in https://login.tailscale.com/admin/machines"
 else
-  $T set --advertise-routes="$LAN"
+  rm -f /tmp/ts-user-off
+  # shellcheck disable=SC2046
+  $T up $(cat /root/ts/up-flags) --timeout=20s >/dev/null 2>&1 || true
   echo "Tailscale is up (sharing $LAN):"; $T status | head -1
 fi
 EOF

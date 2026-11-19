@@ -53,8 +53,14 @@ enum SSH {
         await withCheckedContinuation { cont in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            // Reuse one SSH connection for all requests (a new handshake every poll is expensive
+            // on the router's small CPU); it stays open for 2 minutes after the last request.
+            let controlPath = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".ssh/routerbar-%C").path
             p.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=4",
                            "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
+                           "-o", "ControlMaster=auto", "-o", "ControlPath=\(controlPath)",
+                           "-o", "ControlPersist=120",
                            "--", host, command]
             let out = Pipe(), err = Pipe()
             p.standardOutput = out

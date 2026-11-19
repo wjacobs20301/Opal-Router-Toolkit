@@ -118,46 +118,66 @@ chmod +x /etc/vpn-led/patch.sh
 
 cat > /etc/vpn-led/ts-health.sh <<'HEALTH'
 #!/bin/sh
-# Writes /tmp/ts-health for the LED: "bad" while Tailscale isn't connected.
-#  - only if Tailscale is set up here (its login state file exists)
-#  - starts as "bad": Tailscale counts as not connected until a check says it is
-#  - checks every 10s while not connected, every 60s while connected
-#  - only checks while the internet is up (the LED only shows it then anyway);
-#    checks right away when the internet comes back
-# Covers: tailscaled not running / missing after a firmware update, logged out or
-# expired login (BackendState != Running), or not reaching Tailscale's servers.
+# Writes /tmp/ts-health for the LED and RouterBar:
+#   ok    Tailscale connected
+#   bad   Tailscale should be connected but isn't (LED shows white/blue)
+#   off   turned off on purpose (RouterBar switch or `tailscale down`); LED stays normal
+#
+# Light on the router: the Tailscale CLI (a 25 MB program) only runs when the router has
+# room for it - CPU load under 8 (normal is 3-6), 25 MB+ usable memory, no VPN switch in progress - at the
+# lowest priority with a 45 s limit; otherwise the last state is kept. Every 30 s while
+# there's a problem, every 2 minutes while connected. Only while the internet is up.
 OUT=/tmp/ts-health
 STATE=/root/ts/tailscaled.state
-TS="/root/ts/tailscale --socket=/var/run/tailscale/tailscaled.sock"
+# GNU timeout first: inside BusyBox nice, "timeout" would be BusyBox's, which has other options.
+TS="timeout 45 nice -n 19 /root/ts/tailscale --socket=/var/run/tailscale/tailscaled.sock"
 echo bad > $OUT
-last=0          # uptime of the last check
+last=0          # uptime of the last full check
 was_online=0
-ts_ok() {
-    [ -x /root/ts/tailscale ] && pidof tailscaled >/dev/null || return 1
-    J=$($TS status --json --peers=false 2>/dev/null)
-    [ "$(echo "$J" | jsonfilter -e @.BackendState 2>/dev/null)" = "Running" ] && \
-    [ "$(echo "$J" | jsonfilter -e @.Self.Online 2>/dev/null)" = "true" ]
+set_state() {
+    old=$(cat $OUT 2>/dev/null)
+    [ "$old" = "$1" ] && return
+    echo "$1" > $OUT
+    case "$1" in
+        ok)  logger -t vpn-led "Tailscale connected" ;;
+        bad) logger -t vpn-led "Tailscale not connected, LED alternating white/blue" ;;
+        off) logger -t vpn-led "Tailscale turned off" ;;
+    esac
 }
 # Internet up = the LED daemon is showing an online state (see sft1200_led_online_mark).
 online() {
     local s; s=$(cat /tmp/led-online 2>/dev/null)
     [ -n "$s" ] && [ "$s" != 0 ] && [ $(($(cut -d. -f1 /proc/uptime) - s)) -le 20 ]
 }
+# Room to run the CLI without pushing the router over the edge?
+roomy() {
+    [ "$(cut -d. -f1 /proc/loadavg)" -lt 8 ] || return 1     # normal here: 3-6; crashes at 11+
+    [ "$(awk '/MemAvailable/{a=$2} /SwapFree/{s=$2} END{printf "%d", a + s / 2}' /proc/meminfo)" -ge 25000 ] || return 1
+    # A GL.iNet VPN switch (side switch / dashboard / RouterBar) is running
+    if [ -e /var/lock/gl-switch.lock ] && ! flock -n /var/lock/gl-switch.lock true; then return 1; fi
+    pgrep -f "vpn-client|setup_autovpn" >/dev/null && return 1
+    return 0
+}
 while :; do
     sleep 2
     if [ ! -f "$STATE" ]; then echo ok > $OUT; continue; fi
+    if [ -e /tmp/ts-user-off ]; then set_state off; continue; fi
+    if ! pidof tailscaled >/dev/null; then set_state bad; continue; fi     # free check
     up=$(cut -d. -f1 /proc/uptime)
-    if ! online; then was_online=0; continue; fi                     # internet down
-    interval=60; [ "$(cat $OUT)" = "bad" ] && interval=10
+    if ! online; then was_online=0; continue; fi                         # internet down
+    interval=120; [ "$(cat $OUT)" != "ok" ] && interval=30
     if [ $was_online = 0 ] || [ $((up - last)) -ge $interval ]; then
+        roomy || continue                                                # busy: try later
         was_online=1; last=$up
-        if ts_ok; then
-            [ "$(cat $OUT)" = "bad" ] && logger -t vpn-led "Tailscale connected"
-            echo ok > $OUT
-        else
-            [ "$(cat $OUT)" = "ok" ] && logger -t vpn-led "Tailscale not connected, LED alternating white/blue"
-            echo bad > $OUT
-        fi
+        J=$($TS status --json --peers=false 2>/dev/null)
+        bs=$(echo "$J" | jsonfilter -e @.BackendState 2>/dev/null)
+        if [ "$bs" = "Running" ] && [ "$(echo "$J" | jsonfilter -e @.Self.Online 2>/dev/null)" = "true" ]; then
+            set_state ok
+        elif [ "$bs" = "Stopped" ]; then
+            set_state off
+        elif [ -n "$J" ]; then
+            set_state bad
+        fi                                     # no answer (timed out): keep last state
     fi
 done
 HEALTH

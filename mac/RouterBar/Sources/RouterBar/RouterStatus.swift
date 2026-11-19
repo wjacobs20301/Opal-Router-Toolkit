@@ -18,7 +18,8 @@ struct RouterStatus: Codable, Equatable, Sendable {
     struct Tailscale: Codable, Equatable, Sendable {
         var installed: Bool
         var running: Bool
-        var health: String         // ok | bad | ""
+        var wanted: Bool?          // false = turned off on purpose (RouterBar / tailscale down)
+        var health: String         // ok | bad | off | ""
         var ip: String
     }
     struct Reboots: Codable, Equatable, Sendable {

@@ -32,4 +32,11 @@ start_service() {
     procd_set_param command $TS/memguard.sh
     procd_set_param respawn 3600 30 5
     procd_close_instance
+
+    # At boot, always connect (even if Tailscale was turned off before the restart).
+    # /tmp is wiped at boot, so this marker tells a real boot from a service restart.
+    if [ ! -e /tmp/ts-booted ] && [ -x $TS/ts-ctl.sh ]; then
+        touch /tmp/ts-booted
+        start-stop-daemon -S -b -x $TS/ts-ctl.sh -- boot
+    fi
 }

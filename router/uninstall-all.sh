@@ -34,7 +34,7 @@ echo "== Tailscale"
 if has /etc/init.d/tailscale || has /root/ts; then
     found=1
     run "/etc/init.d/tailscale stop 2>/dev/null; /etc/init.d/tailscale disable 2>/dev/null; true"
-    run "rm -rf /root/ts /etc/init.d/tailscale /var/run/tailscale"
+    run "rm -rf /root/ts /etc/init.d/tailscale /var/run/tailscale /tmp/ts-user-off /tmp/ts-booted"
 fi
 if uci -q get network.tailscale >/dev/null || uci -q get firewall.tailscale >/dev/null; then
     found=1
@@ -80,7 +80,8 @@ echo "== Firmware-update keep-list"
 KEEP_ENTRIES="/etc/vpn-led/ /etc/init.d/vpn-led /etc/rc.d/S96vpn-led
 /etc/reboot-log/ /etc/init.d/reboot-log /etc/rc.d/S12reboot-log /etc/rc.d/K01reboot-log
 /etc/router-app/
-/root/ts/tailscaled.state /root/ts/memguard.sh /root/ts/autoinstall.sh /etc/init.d/tailscale /etc/rc.d/S99tailscale"
+/root/ts/tailscaled.state /root/ts/memguard.sh /root/ts/autoinstall.sh /root/ts/ts-ctl.sh /root/ts/up-flags
+/etc/init.d/tailscale /etc/rc.d/S99tailscale"
 PATTERNS=/tmp/toolkit-keep-entries
 printf '%s\n' $KEEP_ENTRIES > $PATTERNS
 if grep -qxF -f $PATTERNS /etc/sysupgrade.conf; then

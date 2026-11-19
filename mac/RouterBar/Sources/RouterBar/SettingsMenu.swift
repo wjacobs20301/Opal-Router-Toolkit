@@ -15,11 +15,15 @@ final class SettingsMenu: NSObject {
         login.state = model.launchAtLogin ? .on : .off
         let ts = NSMenuItem(title: "Connect over Tailscale Only", action: #selector(toggleTailscale), keyEquivalent: "")
         ts.state = model.tailscaleOnly ? .on : .off
+        let restart = NSMenuItem(title: "Restart Tailscale on Router", action: #selector(restartTailscale), keyEquivalent: "")
+        restart.isEnabled = model.status?.tailscale.installed == true && model.busyAction == nil
         let quit = NSMenuItem(title: "Quit RouterBar", action: #selector(quit), keyEquivalent: "q")
-        for item in [login, ts, quit] { item.target = shared }
+        for item in [login, ts, restart, quit] { item.target = shared }
 
         menu.addItem(login)
         menu.addItem(ts)
+        menu.addItem(.separator())
+        menu.addItem(restart)
         menu.addItem(.separator())
         menu.addItem(quit)
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
@@ -27,5 +31,6 @@ final class SettingsMenu: NSObject {
 
     @objc private func toggleLogin() { model?.launchAtLogin.toggle() }
     @objc private func toggleTailscale() { model?.tailscaleOnly.toggle() }
+    @objc private func restartTailscale() { model?.perform("tailscale-restart", label: "Tailscale restart") }
     @objc private func quit() { NSApp.terminate(nil) }
 }

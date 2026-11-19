@@ -57,6 +57,11 @@ final class RouterModel: ObservableObject {
                     failures = 0
                     status = new
                     self.route = route
+                    if let sw = vpnSwitching,
+                       (new.vpn.wanted == sw.target && new.vpn.state != "connecting") ||
+                       Date().timeIntervalSince(sw.since) > 45 {
+                        vpnSwitching = nil
+                    }
                     lastError = nil
                     lastUpdated = Date()
                 } catch {
@@ -78,7 +83,7 @@ final class RouterModel: ObservableObject {
             internet: true,
             upstream: .init(type: "Wi-Fi", device: "sta0", ssid: "Hotel Guest", signal_dbm: "-61", gateway: "192.0.2.1"),
             vpn: .init(wanted: true, state: "connected", server: "vpn.example.net", location: "Canada,Vancouver"),
-            tailscale: .init(installed: true, running: true, health: "ok", ip: "100.64.0.12"),
+            tailscale: .init(installed: true, running: true, wanted: true, health: "ok", ip: "100.64.0.12"),
             reboots: .init(last: "boot #12: UNPLUGGED - router was healthy right before", unexpected: 0),
             devices: [
                 .init(mac: "02:00:00:00:00:01", ip: "192.168.8.120", name: "MacBook-Pro", online: true, lease_expires: 0),
@@ -96,7 +101,40 @@ final class RouterModel: ObservableObject {
     // MARK: Actions
 
     /// The only actions the router accepts (same list as /etc/router-app/action.sh).
-    static let allowedActions: Set<String> = ["vpn-on", "vpn-off", "tailscale-restart", "reboot"]
+    static let allowedActions: Set<String> = ["vpn-on", "vpn-off", "tailscale-on", "tailscale-off",
+                                              "tailscale-restart", "reboot"]
+
+    /// While a VPN switch is in progress (GL.iNet's VPN restart is heavy on this router),
+    /// the VPN tile shows "Switching…" and can't be clicked again.
+    @Published private(set) var vpnSwitching: (target: Bool, since: Date)?
+
+    func toggleVPN() {
+        guard let s = status, vpnSwitching == nil else { return }
+        let on = !s.vpn.wanted
+        vpnSwitching = (on, Date())
+        perform(on ? "vpn-on" : "vpn-off", label: on ? "VPN on" : "VPN off")
+    }
+
+    /// Tailscale on/off. Warns first if this Mac is reaching the router *through* Tailscale.
+    func toggleTailscale() {
+        guard let s = status, s.tailscale.installed else { return }
+        let isOn = s.tailscale.wanted ?? true
+        if isOn && route == .tailscale {
+            let a = NSAlert()
+            a.messageText = "Turn off Tailscale on the router?"
+            a.informativeText = """
+                This Mac is connected to the router through Tailscale. Turning it off will \
+                disconnect RouterBar, and you won't be able to control the router until you're on \
+                its Wi-Fi or Ethernet, or it restarts (Tailscale reconnects automatically at boot).
+                """
+            a.alertStyle = .warning
+            a.addButton(withTitle: "Turn Off Anyway")
+            a.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        perform(isOn ? "tailscale-off" : "tailscale-on", label: isOn ? "Tailscale off" : "Tailscale on")
+    }
 
     func perform(_ action: String, label: String) {
         guard Self.allowedActions.contains(action) else { return }
@@ -187,7 +225,8 @@ final class RouterModel: ObservableObject {
         if old.vpn.state != "connected" && new.vpn.state == "connected" {
             notify("VPN connected", [new.vpn.server, new.vpn.location].filter { !$0.isEmpty }.joined(separator: " · "))
         }
-        if old.tailscale.health != "bad" && new.tailscale.health == "bad" && new.internet {
+        if old.tailscale.health != "bad" && new.tailscale.health == "bad" && new.internet
+            && (new.tailscale.wanted ?? true) {
             notify("Tailscale not connected", "The router's Tailscale connection is down.")
         }
         if old.tailscale.health == "bad" && new.tailscale.health == "ok" {

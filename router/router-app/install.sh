@@ -5,7 +5,7 @@
 #
 #   /etc/router-app/status.sh   prints router status as JSON (reads files/ubus only; cheap)
 #   /etc/router-app/speedtest.sh  internet speed test (direct or through the VPN), prints JSON
-#   /etc/router-app/action.sh   the only actions the app can run: vpn-on, vpn-off, speedtest-*,
+#   /etc/router-app/action.sh   the only actions the app can run: vpn-on/off, tailscale-on/off, speedtest-*,
 #                               tailscale-restart, reboot
 # Kept across firmware updates via /etc/sysupgrade.conf.
 #
@@ -71,6 +71,7 @@ trun=false; pidof tailscaled >/dev/null && trun=true
 thealth=$(cat /tmp/ts-health 2>/dev/null)
 tip=$(ip -4 addr show tailscale0 2>/dev/null | awk '/inet /{sub(/\/.*/,"",$2); print $2}')
 tinst=false; [ -f /root/ts/tailscaled.state ] && tinst=true
+twanted=true; [ -e /tmp/ts-user-off ] && twanted=false
 
 # Reboot log
 rlast=$(grep '^=== boot' /etc/reboot-log/history.log 2>/dev/null | tail -1 | sed 's/^=== //')
@@ -83,8 +84,8 @@ printf '"internet":%s,"upstream":{"type":"%s","device":"%s","ssid":"%s","signal_
     "$internet" "$(s "$utype")" "$(s "$udev")" "$(s "$ussid")" "$(s "$usig")" "$(s "$gw")"
 printf '"vpn":{"wanted":%s,"state":"%s","server":"%s","location":"%s"},' \
     "$vwanted" "$vstate" "$(s "$vname")" "$(s "$vloc")"
-printf '"tailscale":{"installed":%s,"running":%s,"health":"%s","ip":"%s"},' \
-    "$tinst" "$trun" "$(s "$thealth")" "$(s "$tip")"
+printf '"tailscale":{"installed":%s,"running":%s,"wanted":%s,"health":"%s","ip":"%s"},' \
+    "$tinst" "$trun" "$twanted" "$(s "$thealth")" "$(s "$tip")"
 printf '"reboots":{"last":"%s","unexpected":%s},' "$(s "$rlast")" "$runexp"
 
 # Devices: DHCP leases, marked online if the router has a live ARP entry for them.
@@ -105,9 +106,30 @@ chmod +x $D/status.sh
 cat > $D/action.sh <<'ACTION'
 #!/bin/sh
 # The only actions the Mac app can run on the router.
+LOCK=/var/lock/gl-switch.lock
+vpn_wanted() {
+    i=0
+    while [ $i -lt 10 ]; do
+        [ "$(uci -q get route_policy.@rule[$i].enabled)" = "1" ] && return 0
+        i=$((i + 1))
+    done
+    return 1
+}
+vpn_busy() {
+    { [ -e $LOCK ] && ! flock -n $LOCK true; } || pgrep -f "/etc/init.d/vpn-client" >/dev/null
+}
 case "$1" in
-    vpn-on)  flock /var/lock/gl-switch.lock /etc/gl-switch.d/vpn.sh on  >/dev/null 2>&1 & ;;
-    vpn-off) flock /var/lock/gl-switch.lock /etc/gl-switch.d/vpn.sh off >/dev/null 2>&1 & ;;
+    vpn-on|vpn-off)
+        want=on; [ "$1" = vpn-off ] && want=off
+        # Already in that state: do nothing (GL.iNet restarts its whole VPN system otherwise).
+        if [ $want = on ] && vpn_wanted; then echo "already on"; exit 0; fi
+        if [ $want = off ] && ! vpn_wanted; then echo "already off"; exit 0; fi
+        # Never stack VPN switches: they're heavy on this router.
+        if vpn_busy; then echo "busy"; exit 0; fi
+        flock -n $LOCK /etc/gl-switch.d/vpn.sh $want >/dev/null 2>&1 &
+        ;;
+    tailscale-on)  /root/ts/ts-ctl.sh on  >/dev/null 2>&1 & ;;
+    tailscale-off) /root/ts/ts-ctl.sh off >/dev/null 2>&1 & ;;
     tailscale-restart) /etc/init.d/tailscale restart >/dev/null 2>&1 & ;;
     reboot)  (sleep 2; reboot) >/dev/null 2>&1 & ;;
     speedtest-direct) logger -t router-app "action: $1"; exec /etc/router-app/speedtest.sh direct ;;
