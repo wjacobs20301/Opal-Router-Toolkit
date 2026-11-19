@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0
+
+**Fixed: turning the VPN on from RouterBar could freeze the router** (watchdog reset). A VPN switch makes GL.iNet restart its whole VPN system. During that restart, the Tailscale health check kept launching the 25 MB Tailscale CLI, and RouterBar opened a new SSH connection every 15 s, so CPU load reached 19 and the router stopped responding. Now:
+- The health check skips the CLI during VPN switches or when the router is busy (load ≥ 8, < 25 MB free), and runs it at the lowest priority with a time limit. It also fixed a BusyBox quirk where `nice … timeout` used the wrong `timeout`.
+- VPN on/off does nothing if already in that state, and never stacks switches.
+- RouterBar reuses one SSH connection and shows "Switching…" while the VPN changes.
+- Measured: VPN on now peaks around 9–10 load and recovers, instead of 19 and a freeze.
+
+**New: Tailscale on/off.** Toggle it from RouterBar, with a warning if you're connected through Tailscale. It's off until turned on or the next boot, since the router always reconnects at startup. Turning it off on purpose doesn't trigger the LED warning.
+
+**New: Connections window** in RouterBar:
+- Each load-balanced connection (Ethernet, Repeater, Tethering, Cellular) with live traffic, a 2-minute graph, its load-balance share, and latency/speed tests through that connection alone.
+- Router tests through the normal route or the VPN.
+- Mac → Internet (Apple `networkQuality`) and Mac → Router tests.
+
+New router helpers: `wan.sh`, `latency.sh`, `via.sh`, and the `routerbar-speed` test page.
+
 ## 1.0.0
 
 First release for the GL.iNet GL-SFT1200 (Opal).

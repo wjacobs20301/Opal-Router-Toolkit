@@ -21,6 +21,15 @@ The router downloads Tailscale itself, checks it against pinned SHA-256 fingerpr
 
 Re-running is safe. `REINSTALL=1` re-downloads the program files.
 
+## Turning it on and off
+
+```bash
+ssh glrouter /root/ts/ts-ctl.sh off   # disconnect (Tailscale stays installed)
+ssh glrouter /root/ts/ts-ctl.sh on    # reconnect
+```
+
+RouterBar's Tailscale tile does the same. **"Off" only lasts until the next boot**: the router always reconnects Tailscale when it starts, so you can't lock yourself out permanently. Connection settings come from `/root/ts/up-flags`, which the installer writes.
+
 ## Pieces
 
 | File on router | Purpose |
@@ -29,6 +38,7 @@ Re-running is safe. `REINSTALL=1` re-downloads the program files.
 | `/root/ts/tailscaled.state` | Your login. Kept across firmware updates |
 | `/etc/init.d/tailscale` | procd service: starts at boot, respawns. If the program files are missing, it starts `autoinstall.sh` |
 | `/root/ts/autoinstall.sh` | Waits for internet, reinstalls zram, downloads the pinned release and checks fingerprints (3 tries, then waits for next boot) |
+| `/root/ts/ts-ctl.sh`, `/root/ts/up-flags` | On/off switch and the settings it reconnects with; at boot it always reconnects |
 | `/root/ts/memguard.sh` | Stops `tailscaled` if usable memory (free + half of free zram) drops below 10 MB. After 5 stops in an hour, Tailscale stays off |
 | `zram-swap` package | ~57 MB of compressed swap. Without it, the `tailscale` CLI can't even start next to `tailscaled` |
 | `network.tailscale`, `firewall.tailscale` | Interface + firewall zone, with forwarding in both directions to the LAN |

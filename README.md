@@ -8,6 +8,10 @@ Add-ons for the **GL.iNet GL-SFT1200 (Opal)** travel router, plus **RouterBar**,
   <img src="docs/images/menu-light.png" width="360" alt="RouterBar menu, light mode (demo data)">
 </p>
 
+<p align="center">
+  <img src="docs/images/connections-light.png" width="560" alt="Connections window (demo data)">
+</p>
+
 > Screenshots use made-up demo data.
 
 ## What's included
@@ -17,8 +21,8 @@ Add-ons for the **GL.iNet GL-SFT1200 (Opal)** travel router, plus **RouterBar**,
 | [**VPN status LED**](docs/vpn-led.md) | The top LED shows whether you're actually protected: **solid blue** = VPN connected, **fast blinking blue** = VPN switched on but not connected, **solid white** = VPN off, **breathing blue** = no internet. A **white/blue alternating** pattern means Tailscale isn't connected. |
 | [**Tailscale**](docs/tailscale.md) | Runs Tailscale on the router (128 MB RAM) with compressed memory and a memory guard. Shares the router's LAN with your tailnet, and lets LAN devices reach your tailnet. Reinstalls itself after firmware updates. |
 | [**Reboot log**](docs/reboot-log.md) | Records why the router restarted: clean reboot, unplugged, firmware update, or a real **problem** (freeze/crash). Being unplugged, which is normal for a travel router, is never flagged. |
-| [**Router helpers + speed test**](docs/router-app.md) | A cheap status command (JSON), a fixed list of allowed actions, and an internet speed test against Cloudflare, either direct or through the VPN. |
-| [**RouterBar for macOS**](docs/mac-app.md) | Menu bar app: an animated 3D model of the router whose light mirrors the real LED, VPN and Tailscale controls, connected devices, speed test, router health, and notifications. Works at home over Wi-Fi and anywhere over Tailscale. |
+| [**Router helpers + tests**](docs/router-app.md) | A cheap status command (JSON), a fixed list of allowed actions, load-balanced connection stats, and speed/latency tests against Cloudflare: through the normal route, the VPN, or **one specific connection** (Ethernet, Repeater, Tethering, Cellular). |
+| [**RouterBar for macOS**](docs/mac-app.md) | Menu bar app: an animated 3D model of the router whose light mirrors the real LED, VPN and Tailscale on/off, connected devices, speed test, router health, and notifications. A **Connections** window shows live traffic per load-balanced connection and runs tests per connection, plus Mac → internet and Mac → router tests. Works at home over Wi-Fi and anywhere over Tailscale. |
 
 Everything that changes the router is a plain shell script you can read, and each one has an uninstall command at the top.
 

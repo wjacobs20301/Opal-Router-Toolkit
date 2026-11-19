@@ -48,7 +48,15 @@ Builds you make yourself aren't affected.
   - Real proportions (118 × 85 × 30 mm), rounded body, slatted side vents, front paddle antennas, and the rear port panel.
   - The front light slot glows like the real LED.
   - It sways slowly, and you can **drag to spin it**.
-- **VPN and Tailscale tiles:** turn the VPN on/off, restart Tailscale.
+- **VPN tile:** turn the VPN on/off. While the router switches, which takes up to a minute, it shows "Switching…" and can't be clicked again.
+- **Tailscale tile:** turn Tailscale on/off on the router, showing *Connected*, *Connecting…*, or *Off*. If you're reaching the router **through Tailscale** and turn it off, RouterBar warns that you'll lose control until you're on its Wi-Fi/Ethernet or it restarts. The router always reconnects Tailscale at boot. "Restart Tailscale on Router" is in Settings.
+- **Connections window** (footer → Connections):
+  - **Each load-balanced connection** (Ethernet, Repeater, Tethering, Cellular): status, its share of new connections, live ↓/↑ speed with a 2-minute graph, and **latency / speed tests through that connection alone**.
+  - **From the router:** the same tests through the normal route or the VPN.
+  - **This Mac:** **Mac → Internet** uses Apple's built-in `networkQuality` test. **Mac → Router** tests latency plus download and upload against the router's test page.
+  - It only polls the router while the window is open.
+
+  <img src="images/connections-dark.png" width="520" alt="Connections window (demo data)">
 - **Internet:** connection type, upstream Wi-Fi name and signal, gateway.
 - **Speed test:** direct or through the VPN, with a warning when the router's CPU limited the result.
 - **Devices:** online devices with type icons, plus recently seen ones.
@@ -69,7 +77,7 @@ defaults write local.routerbar localHost my-router
 defaults write local.routerbar tailscaleHost my-router-ts
 ```
 
-It polls `status.sh` every 15 seconds.
+It polls `status.sh` every 15 seconds over **one reused SSH connection** (`ControlMaster`, kept open 2 minutes after the last request; socket in `~/.ssh/routerbar-*`). A new SSH handshake every poll is surprisingly expensive on the router's small CPU.
 
 ## Notifications
 
@@ -88,6 +96,7 @@ They're designed for a travel router that gets unplugged and moved around a lot:
 APP=mac/RouterBar/build/RouterBar.app/Contents/MacOS/RouterBar
 $APP --snapshot /tmp/shots          # render menu (light/dark), 3D model, and icons with live data
 $APP --demo --snapshot /tmp/shots   # same with made-up demo data (used for the README images)
+$APP --selftest                     # run the Connections window's tests and print the results
 ```
 
 Source overview:
@@ -101,4 +110,5 @@ Source overview:
 | `LEDPattern.swift` | LED timing/colors, shared clock, menu bar icon renderer |
 | `Router3DView.swift` | The 3D router renderer |
 | `MenuView.swift`, `SpeedTestCard.swift`, `SettingsMenu.swift` | UI |
-| `Snapshot.swift` | `--snapshot` rendering |
+| `ConnectionsModel.swift`, `ConnectionsView.swift` | Connections window: live per-connection traffic and tests |
+| `Snapshot.swift` | `--snapshot` rendering, `--selftest` |

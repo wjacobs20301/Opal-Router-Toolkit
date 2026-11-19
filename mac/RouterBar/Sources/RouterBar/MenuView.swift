@@ -5,6 +5,7 @@ private let accentBlue = Color(red: 0.16, green: 0.47, blue: 1.0)
 struct MenuView: View {
     @ObservedObject var model: RouterModel
     var close: () -> Void = {}
+    var openConnections: () -> Void = {}
     @State private var showAllDevices = false
 
     var body: some View {
@@ -200,6 +201,7 @@ struct MenuView: View {
     private var footer: some View {
         HStack(spacing: 4) {
             FooterButton(symbol: "safari", label: "Dashboard") { model.openDashboard(); close() }
+            FooterButton(symbol: "network", label: "Connections") { openConnections() }
             FooterButton(symbol: "power", label: "Reboot") { close(); model.confirmReboot() }
                 .disabled(!model.reachable || model.busyAction != nil)
             FooterButton(symbol: "gearshape", label: "Settings") { SettingsMenu.show(model: model) }

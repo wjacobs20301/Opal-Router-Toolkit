@@ -70,16 +70,16 @@ if has /etc/init.d/reboot-log || has /etc/reboot-log; then
 fi
 
 echo "== Router helpers"
-if has /etc/router-app; then
+if has /etc/router-app || has /www/cgi-bin/routerbar-speed; then
     found=1
-    run "rm -rf /etc/router-app /var/run/speedtest.lock"
+    run "rm -rf /etc/router-app /var/run/speedtest.lock /www/cgi-bin/routerbar-speed"
 fi
 
 echo "== Firmware-update keep-list"
 # Remove exactly the lines this toolkit added; leave anything else (even if similar) alone.
 KEEP_ENTRIES="/etc/vpn-led/ /etc/init.d/vpn-led /etc/rc.d/S96vpn-led
 /etc/reboot-log/ /etc/init.d/reboot-log /etc/rc.d/S12reboot-log /etc/rc.d/K01reboot-log
-/etc/router-app/
+/etc/router-app/ /www/cgi-bin/routerbar-speed
 /root/ts/tailscaled.state /root/ts/memguard.sh /root/ts/autoinstall.sh /root/ts/ts-ctl.sh /root/ts/up-flags
 /etc/init.d/tailscale /etc/rc.d/S99tailscale"
 PATTERNS=/tmp/toolkit-keep-entries

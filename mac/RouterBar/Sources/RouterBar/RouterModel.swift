@@ -184,14 +184,17 @@ final class RouterModel: ObservableObject {
         if a.runModal() == .alertFirstButtonReturn { perform("reboot", label: "Reboot") }
     }
 
-    func openDashboard() {
-        // Only open a real IPv4 address reported by the router (never an arbitrary URL).
-        var ip = status?.lan_ip ?? ""
+    /// The router's LAN address, only if it's a real IPv4 address (never an arbitrary host).
+    var validatedLanIP: String {
+        let ip = status?.lan_ip ?? ""
         let parts = ip.split(separator: ".", omittingEmptySubsequences: false)
         let isIPv4 = parts.count == 4 && parts.allSatisfy { p in
             p.count <= 3 && !p.isEmpty && p.allSatisfy(\.isNumber) && (Int(p) ?? 256) <= 255 }
-        if !isIPv4 { ip = "192.168.8.1" }   // GL.iNet default
-        if let url = URL(string: "http://\(ip)") { NSWorkspace.shared.open(url) }
+        return isIPv4 ? ip : "192.168.8.1"   // GL.iNet default
+    }
+
+    func openDashboard() {
+        if let url = URL(string: "http://\(validatedLanIP)") { NSWorkspace.shared.open(url) }
     }
 
     // MARK: Notifications

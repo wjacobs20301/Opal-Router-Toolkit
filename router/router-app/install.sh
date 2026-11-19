@@ -4,7 +4,11 @@
 # Install:  ssh glrouter 'sh -s' < router/router-app/install.sh
 #
 #   /etc/router-app/status.sh   prints router status as JSON (reads files/ubus only; cheap)
-#   /etc/router-app/speedtest.sh  internet speed test (direct or through the VPN), prints JSON
+#   /etc/router-app/speedtest.sh  internet speed test (direct, VPN, or one connection), prints JSON
+#   /etc/router-app/latency.sh  latency test (direct, VPN, or one connection), prints JSON
+#   /etc/router-app/wan.sh      load-balanced connections with byte counters, prints JSON
+#   /etc/router-app/via.sh      shared helper: send a test through one specific path
+#   /www/cgi-bin/routerbar-speed  Mac <-> router throughput test page (50 MB cap)
 #   /etc/router-app/action.sh   the only actions the app can run: vpn-on/off, tailscale-on/off, speedtest-*,
 #                               tailscale-restart, reboot
 # Kept across firmware updates via /etc/sysupgrade.conf.
@@ -103,6 +107,125 @@ printf ']}\n'
 STATUS
 chmod +x $D/status.sh
 
+cat > $D/via.sh <<'VIA'
+# Sourced by speedtest.sh / latency.sh: send test traffic through one specific path.
+#   via_setup direct | vpn | wan:<interface>     sets VIA_CURL, VIA_PING (or VIA_ERR)
+#   via_cleanup                                   removes any temporary routing
+# For wan:<interface> it adds a temporary source-based route (rule priority 2, table 990),
+# so the test leaves through that connection even while load balancing is on.
+VIA_TABLE=990
+VIA_RULE=""
+via_setup() {
+    VIA_CURL=""; VIA_PING=""; VIA_ERR=""
+    case "$1" in
+        direct) return 0 ;;
+        vpn)
+            [ "$(cat /tmp/wireguard/wgclient1_state 2>/dev/null)" = connected ] || { VIA_ERR="VPN is not connected"; return 1; }
+            VIA_CURL="--interface wgclient1"; VIA_PING="-I wgclient1"; return 0 ;;
+        wan:*)
+            i=${1#wan:}
+            case "$i" in *[!a-z0-9_]*|"") VIA_ERR="Unknown connection"; return 1 ;; esac
+            uci -q get kmwan.$i >/dev/null || [ "$(uci -q show kmwan | grep -c "interface='$i'")" -gt 0 ] || { VIA_ERR="Unknown connection"; return 1; }
+            j=$(ubus call network.interface.$i status 2>/dev/null) || { VIA_ERR="Unknown connection"; return 1; }
+            [ "$(echo "$j" | jsonfilter -e @.up)" = true ] || { VIA_ERR="That connection is not connected"; return 1; }
+            dev=$(echo "$j" | jsonfilter -e @.l3_device)
+            ip=$(echo "$j" | jsonfilter -e '@["ipv4-address"][0].address')
+            gw=$(echo "$j" | jsonfilter -e '@.route[0].nexthop')
+            [ -n "$dev" ] && [ -n "$ip" ] || { VIA_ERR="That connection has no address"; return 1; }
+            ip route flush table $VIA_TABLE 2>/dev/null
+            if [ -n "$gw" ] && [ "$gw" != "0.0.0.0" ]; then
+                ip route add default via "$gw" dev "$dev" table $VIA_TABLE || { VIA_ERR="Couldn't route through it"; return 1; }
+            else
+                ip route add default dev "$dev" table $VIA_TABLE || { VIA_ERR="Couldn't route through it"; return 1; }
+            fi
+            ip rule add from "$ip" lookup $VIA_TABLE priority 2 && VIA_RULE="$ip"
+            VIA_CURL="--interface $ip"; VIA_PING="-I $ip"; return 0 ;;
+        *) VIA_ERR="Unknown path"; return 1 ;;
+    esac
+}
+via_cleanup() {
+    [ -n "$VIA_RULE" ] && ip rule del from "$VIA_RULE" lookup $VIA_TABLE priority 2 2>/dev/null
+    ip route flush table $VIA_TABLE 2>/dev/null
+    VIA_RULE=""
+}
+VIA
+
+cat > $D/latency.sh <<'LAT'
+#!/bin/sh
+# Latency test (8 pings to 1.1.1.1) through one path. Prints JSON.
+#   latency.sh direct | vpn | wan:<interface>
+err() { printf '{"error":"%s"}\n' "$1"; exit 0; }
+. /etc/router-app/via.sh
+via_setup "${1:-direct}" || err "$VIA_ERR"
+trap via_cleanup EXIT
+# shellcheck disable=SC2086
+out=$(ping -c 8 -W 2 $VIA_PING 1.1.1.1 2>&1)
+echo "$out" | awk -v path="${1:-direct}" '
+    /time=/ { sub(/.*time=/, ""); t[n++] = $1 + 0 }
+    /packets transmitted/ { tx = $1; rx = $4 }
+    END {
+        if (tx == 0) { print "{\"error\":\"Ping failed\"}"; exit }
+        if (n == 0) { printf "{\"path\":\"%s\",\"sent\":%d,\"received\":0,\"loss_pct\":100}\n", path, tx; exit }
+        mn = t[0]; mx = t[0]; s = 0; j = 0
+        for (i = 0; i < n; i++) { s += t[i]; if (t[i] < mn) mn = t[i]; if (t[i] > mx) mx = t[i] }
+        for (i = 1; i < n; i++) { d = t[i] - t[i-1]; j += (d < 0 ? -d : d) }
+        printf "{\"path\":\"%s\",\"sent\":%d,\"received\":%d,\"loss_pct\":%d,\"min_ms\":%.1f,\"avg_ms\":%.1f,\"max_ms\":%.1f,\"jitter_ms\":%.1f}\n",
+            path, tx, rx, (tx - rx) * 100 / tx, mn, s / n, mx, (n > 1 ? j / (n - 1) : 0)
+    }'
+LAT
+chmod +x $D/latency.sh
+
+cat > $D/wan.sh <<'WAN'
+#!/bin/sh
+# Every load-balanced connection with its state and byte counters, as JSON. Cheap (no
+# iwinfo), so RouterBar can poll it every couple of seconds while its window is open.
+s() { printf '%s' "$1" | tr -d '\n\r' | sed 's/["\\]//g; s/[^ -~]//g'; }
+mode=$(uci -q get kmwan.global.mode)
+printf '{"mode":"%s","uptime":%s,"interfaces":[' "$(s "$mode")" "$(cut -d. -f1 /proc/uptime)"
+first=1
+for m in $(uci -q show kmwan | sed -n "s/^kmwan\.\([^.=]*\)=member$/\1/p"); do
+    i=$(uci -q get kmwan.$m.interface); [ -n "$i" ] || continue
+    j=$(ubus call network.interface.$i status 2>/dev/null) || continue
+    up=$(echo "$j" | jsonfilter -e @.up); [ "$up" = true ] || up=false
+    dev=$(echo "$j" | jsonfilter -e @.l3_device)
+    ip=$(echo "$j" | jsonfilter -e '@["ipv4-address"][0].address')
+    gw=$(echo "$j" | jsonfilter -e '@.route[0].nexthop')
+    st=$(awk -v n="$i" '$1 == n { print $4 }' /proc/gl-kmwan/status 2>/dev/null)
+    set -- $(awk -v d="$dev:" '{ sub(/^ +/, "") } index($0, d) == 1 { sub(d, ""); print $1, $9 }' /proc/net/dev)
+    rx=${1:-0}; tx=${2:-0}
+    case "$i" in
+        wan) type=Ethernet ;; wwan) type=Repeater ;; tethering) type=Tethering ;;
+        secondwan) type="Ethernet 2" ;; modem*) type=Cellular ;; *) type=$i ;;
+    esac
+    [ $first = 1 ] || printf ','; first=0
+    printf '{"name":"%s","type":"%s","up":%s,"state":"%s","device":"%s","ip":"%s","gateway":"%s","weight":%s,"disabled":%s,"rx_bytes":%s,"tx_bytes":%s}' \
+        "$(s "$i")" "$(s "$type")" "$up" "$(s "$st")" "$(s "$dev")" "$(s "$ip")" "$(s "$gw")" \
+        "$(uci -q get kmwan.$m.weight || echo 1)" "$([ "$(uci -q get kmwan.$m.disabled)" = 1 ] && echo true || echo false)" "$rx" "$tx"
+done
+printf ']}\n'
+WAN
+chmod +x $D/wan.sh
+
+# Mac -> router throughput test page (GET: download zeros, POST: upload discarded). 50 MB cap.
+mkdir -p /www/cgi-bin
+cat > /www/cgi-bin/routerbar-speed <<'CGI'
+#!/bin/sh
+max=50000000
+if [ "$REQUEST_METHOD" = POST ]; then
+    n=${CONTENT_LENGTH:-0}; case "$n" in *[!0-9]*|"") n=0 ;; esac
+    [ "$n" -gt $max ] && n=$max
+    head -c "$n" > /dev/null
+    printf 'Content-Type: text/plain\r\nCache-Control: no-store\r\n\r\nok\n'
+    exit 0
+fi
+n=$(echo "$QUERY_STRING" | sed -n 's/^.*bytes=\([0-9][0-9]*\).*$/\1/p')
+[ -z "$n" ] && n=1000000
+[ "$n" -gt $max ] && n=$max
+printf 'Content-Type: application/octet-stream\r\nContent-Length: %s\r\nCache-Control: no-store\r\n\r\n' "$n"
+head -c "$n" /dev/zero
+CGI
+chmod 755 /www/cgi-bin/routerbar-speed
+
 cat > $D/action.sh <<'ACTION'
 #!/bin/sh
 # The only actions the Mac app can run on the router.
@@ -134,6 +257,12 @@ case "$1" in
     reboot)  (sleep 2; reboot) >/dev/null 2>&1 & ;;
     speedtest-direct) logger -t router-app "action: $1"; exec /etc/router-app/speedtest.sh direct ;;
     speedtest-vpn)    logger -t router-app "action: $1"; exec /etc/router-app/speedtest.sh vpn ;;
+    speedtest-wan-*)  i=${1#speedtest-wan-}; case "$i" in *[!a-z0-9_]*|"") echo "unknown action"; exit 1 ;; esac
+                      logger -t router-app "action: $1"; exec /etc/router-app/speedtest.sh "wan:$i" ;;
+    latency-direct)   exec /etc/router-app/latency.sh direct ;;
+    latency-vpn)      exec /etc/router-app/latency.sh vpn ;;
+    latency-wan-*)    i=${1#latency-wan-}; case "$i" in *[!a-z0-9_]*|"") echo "unknown action"; exit 1 ;; esac
+                      exec /etc/router-app/latency.sh "wan:$i" ;;
     *) echo "unknown action"; exit 1 ;;
 esac
 logger -t router-app "action: $1"
@@ -144,8 +273,9 @@ chmod +x $D/action.sh
 cat > $D/speedtest.sh <<'SPEED'
 #!/bin/sh
 # Internet speed test from the router to Cloudflare's speed servers (~25 s). Prints JSON.
-#   speedtest.sh direct   the router's own internet line
-#   speedtest.sh vpn      through the VPN tunnel (wgclient1)
+#   speedtest.sh direct      the router's normal internet route
+#   speedtest.sh vpn         through the VPN tunnel (wgclient1)
+#   speedtest.sh wan:<name>  through one load-balanced connection (wan, wwan, tethering, ...)
 # Download: 4 parallel 25 MB transfers. Upload: 2 parallel 12 MB streamed transfers.
 # Also records how busy the CPU was (the router can cap HTTPS speed around 90-100 Mbit/s).
 URL=https://speed.cloudflare.com
@@ -158,12 +288,11 @@ echo $$ > $LOCK
 trap 'rm -f $LOCK; rm -rf $OUT' EXIT
 mkdir -p $OUT
 
-IF=""; PATHNAME=direct
-if [ "$1" = vpn ]; then
-    [ "$(cat /tmp/wireguard/wgclient1_state 2>/dev/null)" = connected ] || err "VPN is not connected"
-    IF="--interface wgclient1"; PATHNAME=vpn
-fi
-C="curl -s $IF"
+. /etc/router-app/via.sh
+via_setup "${1:-direct}" || err "$VIA_ERR"
+trap 'via_cleanup; rm -f $LOCK; rm -rf $OUT' EXIT
+PATHNAME="${1:-direct}"
+C="curl -s $VIA_CURL"
 
 now() { cut -d' ' -f1 /proc/uptime; }
 cpu() { awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat; }
@@ -208,5 +337,7 @@ printf '{"path":"%s","server":"%s","ping_ms":%s,"jitter_ms":%s,"download_mbps":%
 SPEED
 chmod +x $D/speedtest.sh
 
-grep -qx "$D/" /etc/sysupgrade.conf || echo "$D/" >> /etc/sysupgrade.conf
+for p in "$D/" /www/cgi-bin/routerbar-speed; do
+    grep -qx "$p" /etc/sysupgrade.conf || echo "$p" >> /etc/sysupgrade.conf
+done
 echo "Router app helpers installed."

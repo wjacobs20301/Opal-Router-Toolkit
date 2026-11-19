@@ -1,6 +1,6 @@
 # Router helpers and speed test
 
-`router/router-app/install.sh` installs three scripts in `/etc/router-app/` (kept across firmware updates). RouterBar uses them, but they work fine on their own.
+`router/router-app/install.sh` installs these scripts in `/etc/router-app/`, plus a small test page, all kept across firmware updates. RouterBar uses them, but they work fine on their own.
 
 ## `status.sh`: router status as JSON
 
@@ -29,10 +29,12 @@ ssh glrouter /etc/router-app/status.sh
 
 | Action | Effect |
 |---|---|
-| `vpn-on`, `vpn-off` | Same as flipping the side switch (`/etc/gl-switch.d/vpn.sh`) |
+| `vpn-on`, `vpn-off` | Same as flipping the side switch (`/etc/gl-switch.d/vpn.sh`). Does nothing if already in that state, and refuses while another VPN switch is running. GL.iNet's VPN restart is heavy on this router, so switches are never stacked |
 | `tailscale-restart` | Restarts the Tailscale service |
 | `reboot` | Clean reboot after 2 s |
-| `speedtest-direct`, `speedtest-vpn` | Runs the speed test and prints its JSON |
+| `tailscale-on`, `tailscale-off` | Connects/disconnects Tailscale (stays installed). "Off" lasts until turned on or the next boot |
+| `speedtest-direct`, `speedtest-vpn`, `speedtest-wan-<name>` | Runs the speed test and prints its JSON |
+| `latency-direct`, `latency-vpn`, `latency-wan-<name>` | Runs the latency test and prints its JSON |
 
 Anything else is rejected.
 
@@ -55,3 +57,33 @@ It takes about 25 s and tests against Cloudflare's speed servers (`speed.cloudfl
 ```
 
 Only one test runs at a time. A second one gets `{"error":"A speed test is already running"}`.
+
+## `wan.sh`: load-balanced connections
+
+```bash
+ssh glrouter /etc/router-app/wan.sh
+```
+
+Lists every connection in GL.iNet's multi-WAN setup (`kmwan`): `wan` (Ethernet), `wwan` (Repeater), `tethering`, `secondwan`, cellular modems. Each entry has whether it's up, the load-balancing state (`ACTIVE` when in use), device, address, gateway, weight, and raw byte counters. It reads only files and `ubus`, so RouterBar polls it every 2 seconds while its Connections window is open, and works out live speeds from the counters.
+
+## `latency.sh` and per-connection tests
+
+```bash
+ssh glrouter /etc/router-app/latency.sh direct        # normal route
+ssh glrouter /etc/router-app/latency.sh vpn           # through the VPN
+ssh glrouter /etc/router-app/latency.sh wan:wwan      # through one specific connection
+ssh glrouter /etc/router-app/speedtest.sh wan:wan     # speed test through Ethernet only
+```
+
+`latency.sh` sends 8 pings to `1.1.1.1` and reports average, min/max, jitter and loss.
+
+To test **one** connection while load balancing is on, `via.sh` adds a temporary source-based route: an `ip rule` with priority 2 pointing at table 990, with a default route through that connection's gateway. It then binds the test to that connection's address and removes the rule and table afterward, even if the test fails.
+
+## Mac ↔ router test page
+
+`/www/cgi-bin/routerbar-speed` lets RouterBar measure the link between a Mac and the router:
+
+- `GET ?bytes=N` streams N zero bytes.
+- `POST` discards the body.
+
+Both are capped at 50 MB. It's served by GL.iNet's web server on the router's LAN, and over Tailscale. Throughput is limited by the router's CPU running the page (roughly 15–40 Mbit/s on the SF1200).

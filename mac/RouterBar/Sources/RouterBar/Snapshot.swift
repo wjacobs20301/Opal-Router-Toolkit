@@ -5,6 +5,42 @@ import AppKit
 /// and the menu bar icon in every LED state to PNGs, then quits.
 @MainActor
 enum Snapshot {
+    /// `RouterBar --selftest`: runs the Connections window's tests (same code as the buttons)
+    /// and prints the results, then quits.
+    static func runSelfTestIfRequested(model: RouterModel) -> Bool {
+        guard CommandLine.arguments.contains("--selftest") else { return false }
+        Task { @MainActor in
+            for _ in 0..<40 where model.status == nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+            let c = ConnectionsModel(router: model)
+            @MainActor func waitRouterTest() async { while c.runningTest != nil { try? await Task.sleep(nanoseconds: 300_000_000) } }
+            @MainActor func waitMacTest() async { while c.macTest != nil { try? await Task.sleep(nanoseconds: 300_000_000) } }
+            c.startPolling(); try? await Task.sleep(nanoseconds: 4_500_000_000); c.stopPolling()
+            for i in c.snapshot?.interfaces ?? [] {
+                let r = c.history[i.name]?.last
+                print("connection \(i.type): up=\(i.up) state=\(i.state) share=\(c.share(of: i).map { "\(Int($0 * 100))%" } ?? "-") rate=\(r.map { String(format: "%.2f/%.2f Mbit/s", $0.down, $0.up) } ?? "-")")
+            }
+            if let up = c.snapshot?.interfaces.first(where: { $0.up }) {
+                c.runLatency("wan:\(up.name)"); await waitRouterTest()
+                let l = c.latency["wan:\(up.name)"]
+                print("router latency via \(up.type): avg \(l?.avg_ms ?? -1) ms, loss \(l?.loss_pct ?? -1)%, error \(l?.error ?? "none")")
+                c.runSpeed("wan:\(up.name)"); await waitRouterTest()
+                let sp = c.speed["wan:\(up.name)"]
+                print("router speed via \(up.type): \(sp?.download_mbps ?? -1) down / \(sp?.upload_mbps ?? -1) up, error \(sp?.error ?? "none")")
+            }
+            c.runLatency("direct"); await waitRouterTest()
+            print("router latency normal route: avg \(c.latency["direct"]?.avg_ms ?? -1) ms")
+            c.runMacRouter(); await waitMacTest()
+            let m = c.macRouter
+            print("mac->router (\(m?.via ?? "?")): latency \(m?.latencyMs ?? -1) ms, down \(m?.downMbps ?? -1), up \(m?.upMbps ?? -1) Mbit/s, error \(m?.error ?? "none")")
+            c.runMacInternet(); await waitMacTest()
+            if let mi = c.macInternet { print("mac->internet: down \(mi.downMbps), up \(mi.upMbps) Mbit/s, latency \(mi.latencyMs) ms (\(mi.server))") }
+            else { print("mac->internet error: \(c.macInternetError ?? "?")") }
+            fflush(stdout)
+            NSApp.terminate(nil)
+        }
+        return true
+    }
+
     static func runIfRequested(model: RouterModel) -> Bool {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return false }
@@ -16,6 +52,24 @@ enum Snapshot {
             for (name, scheme) in [("menu-light", ColorScheme.light), ("menu-dark", .dark)] {
                 let view = MenuView(model: model)
                     .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.96))
+                    .environment(\.colorScheme, scheme)
+                let r = ImageRenderer(content: view)
+                r.scale = 2
+                if let img = r.nsImage { write(img, to: dir.appendingPathComponent("\(name).png")) }
+            }
+            // Connections window (live data; polls twice so rates exist).
+            let conns = ConnectionsModel(router: model)
+            if CommandLine.arguments.contains("--demo") {
+                conns.loadDemo()
+            } else {
+                conns.startPolling()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                conns.stopPolling()
+            }
+            for (name, scheme) in [("connections-light", ColorScheme.light), ("connections-dark", .dark)] {
+                let view = ConnectionsView(model: conns, router: model, scrolls: false)
+                    .frame(width: 700)
+                    .background(scheme == .dark ? Color(white: 0.14) : Color(white: 0.97))
                     .environment(\.colorScheme, scheme)
                 let r = ImageRenderer(content: view)
                 r.scale = 2

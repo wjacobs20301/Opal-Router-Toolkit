@@ -24,9 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = RouterModel()
     private let animator = LEDAnimator()
     private var subs = Set<AnyCancellable>()
+    private lazy var connections = ConnectionsModel(router: model)
+    private var connectionsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        if Snapshot.runIfRequested(model: model) { return }
+        if Snapshot.runIfRequested(model: model) || Snapshot.runSelfTestIfRequested(model: model) { return }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.target = self
         item.button?.action = #selector(toggle)
@@ -34,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let host = NSHostingController(rootView: MenuView(model: model, close: { [weak self] in
             self?.popover.performClose(nil)
+        }, openConnections: { [weak self] in
+            self?.popover.performClose(nil)
+            self?.showConnections()
         }))
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
@@ -48,6 +53,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.item.button?.toolTip = self.model.reachable ? (self.model.led?.title ?? "") : "Router unreachable"
             }
         }.store(in: &subs)
+    }
+
+    /// The Connections window (one instance; polling runs only while it's open).
+    func showConnections() {
+        if connectionsWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 760),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.title = "RouterBar — Connections"
+            w.titlebarAppearsTransparent = true
+            w.isReleasedWhenClosed = false
+            w.contentViewController = NSHostingController(rootView: ConnectionsView(model: connections, router: model))
+            w.center()
+            w.setFrameAutosaveName("RouterBarConnections")
+            connectionsWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        connectionsWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func toggle() {

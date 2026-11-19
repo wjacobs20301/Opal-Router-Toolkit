@@ -6,8 +6,8 @@
 #                             build/RouterBar-<version>-macOS.zip
 set -e
 cd "$(dirname "$0")"
-VERSION=1.0.0
-BUILD=1
+VERSION=1.1.0
+BUILD=2
 APP=build/RouterBar.app
 MODE=${1:-install}
 
